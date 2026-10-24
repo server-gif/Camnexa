@@ -293,6 +293,16 @@ body.gam-ad-open #root {
   max-width: 100%;
   overflow: hidden;
 }
+/* On-demand interstitial: until the creative arrives the card shows a loader line. */
+.inter__ad:empty {
+  display: grid;
+  place-items: center;
+}
+.inter__ad:empty::before {
+  content: 'Loading ad…';
+  color: #6b6580;
+  font-size: 0.85rem;
+}
 .inter__ad iframe {
   display: block;
   max-width: 100%;

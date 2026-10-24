@@ -1,7 +1,9 @@
 import { LoaderCircle } from 'lucide-react';
 import { Suspense } from 'react';
-import { Outlet } from 'react-router';
+import { Outlet, useLocation } from 'react-router';
 import { AdAnchor } from '@/components/ads/AdAnchor';
+import { pageName } from '@/lib/attribution';
+import { setAdPage } from '@/lib/gpt';
 import { ScrollManager } from './ScrollManager';
 
 export function PageFallback() {
@@ -14,6 +16,10 @@ export function PageFallback() {
 }
 
 export function RootLayout() {
+  const { pathname } = useLocation();
+  // Set during render (not in an effect) so it is already current when this
+  // route's ad components request their slots in their own, earlier, effects.
+  setAdPage(pageName(pathname));
   return (
     <>
       <ScrollManager />

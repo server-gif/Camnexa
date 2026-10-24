@@ -11,11 +11,17 @@ import { useAdNavigation } from '@/hooks/useAdNavigation';
 import { usePageTitle } from '@/hooks/usePageTitle';
 
 /**
- * Cards shown before each in-grid banner: a banner after the first 4 faces, after
- * the next 4 and after the next 6. Whatever is still left (2 faces today) forms a
- * final ad-free tail, so the grid never ends on a trailing banner.
+ * Cards shown before each in-grid banner: one banner after the first 4 faces.
+ * Whatever is left forms a final ad-free tail, so the grid never ends on a
+ * trailing banner.
+ *
+ * Why only one: Ad Manager's per-unit report showed the lower banners being
+ * seen by only 15-32% of visitors, at an eCPM of $0.08-0.13 against $0.63 for
+ * the top banner — they added ~30% of the impressions but ~7% of the revenue
+ * and dragged the average eCPM down. Add `4` / `6` entries (e.g. `[4, 4, 6]`)
+ * to bring them back.
  */
-const BLOCK_SIZES = [4, 4, 6];
+const BLOCK_SIZES = [4];
 
 type ClipBlock = {
   /** The faces this block renders. */
@@ -51,38 +57,26 @@ export default function ClipsPage() {
         <ProgressIndicator current={0} />
       </div>
 
-      {/* Boxed Google ad sits directly above the screen title, like every page. */}
-      <AdBanner />
-      <div className="pb-4.5 pt-4.5 text-center">
+      {/* Title + the one primary action come FIRST, so Start is on the first
+          screen of every phone. The top banner sits right below it: it is
+          still in view (viewable) but no longer pushes the button off-screen.
+          The interstitial plays on tap, then the flow continues at the age
+          step (see useAdNavigation / gpt.ts: requested on demand, once or twice
+          per session at most). */}
+      <div className="pt-2 text-center">
         <h1 className="text-center text-[20px] font-bold text-white">Random Video Call</h1>
-        {/* The interstitial plays first, then the flow continues at the age step
-            (the rewarded ad is left to the "watch a short ad" button below).
-            The slow `cta-zoom` breath runs on its own — not hover-driven. */}
         <Button
           variant="gradient"
           size="lg"
-          className="mt-4 w-full  rounded-full cursor-pointer"
+          className="mt-4 w-full rounded-full cursor-pointer"
           onClick={() => void navigateWithAd('interstitial', '/age')}
         >
           <Play aria-hidden="true" />
           START VIDEO CALL
         </Button>
-
-        {/* Boxed banner sitting between the two CTAs. */}
-        <AdBanner instance="between-ctas" className="mt-4" />
-
-        {/* Quieter partner CTA under the main one: the rewarded ad plays first and,
-            once it is closed, the flow carries on at the age step. */}
-        <Button
-          variant="secondary"
-          size="lg"
-          className="mt-4 w-full animate-cta-zoom  cursor-pointer rounded-full bg-plum-800 text-[15px] ring-white/5 hover:bg-plum-900"
-          onClick={() => void navigateWithAd('rewarded', '/age')}
-        >
-          <span aria-hidden="true">🎁</span>
-          Unlock premium clips · watch a short ad
-        </Button>
       </div>
+
+      <AdBanner className="mt-5" />
 
       <div className="flex flex-1 flex-col">
         {girlImages.length > 0 ? (
@@ -97,18 +91,18 @@ export default function ClipsPage() {
                         onClick={guardLink('interstitial', '/age')}
                         className="block h-full rounded-2xl outline-offset-4 focus-visible:outline-2 focus-visible:outline-violet-soft"
                       >
-                        <ClipCard image={image} className="h-full" />
+                        <ClipCard image={image} className="h-full" priority={blockIndex === 0} />
                       </Link>
                     </li>
                   ))}
                 </ul>
 
-                {/* The banner that closes each block, i.e. after cards 1-4,
-                    5-8 and 9-14 with the current schedule. Deliberately not
-                    `lazy`: all landing banners are requested on page load so a
-                    visitor who leaves without scrolling still gets them. */}
+                {/* The banner that closes each block (after card 4 with the
+                    current schedule). `lazy`: it is only requested once the
+                    visitor is about to scroll to it, so it is not paid for
+                    (and not counted) when nobody gets that far. */}
                 {block.withAd ? (
-                  <AdBanner instance={`inline-${blockIndex + 1}`} className="mt-0" />
+                  <AdBanner instance={`inline-${blockIndex + 1}`} className="mt-0" lazy />
                 ) : null}
               </div>
             ))}

@@ -8,13 +8,11 @@ import { OnboardingLayout } from '@/components/onboarding/OnboardingLayout';
 import { Button } from '@/components/ui/button';
 import { useOnboarding } from '@/features/onboarding/OnboardingContext';
 import { ageFormSchema, type AgeFormInput, type AgeFormValues } from '@/features/onboarding/onboarding.schema';
-import { useAdNavigation } from '@/hooks/useAdNavigation';
 import { usePageTitle } from '@/hooks/usePageTitle';
 
 export default function AgePage() {
   usePageTitle('Age');
   const navigate = useNavigate();
-  const { navigateWithAd } = useAdNavigation();
   const { state, confirmAge, clearAgeDenial } = useOnboarding();
 
   const {
@@ -53,8 +51,9 @@ export default function AgePage() {
 
   const onValid = () => {
     confirmAge();
-    // The interstitial plays once the age is confirmed, then we move on.
-    void navigateWithAd('interstitial', '/gender');
+    // No interstitial between funnel steps: only ~11% of visitors got past this
+    // step with one in the way, and the ad it showed is not worth that loss.
+    navigate('/gender');
   };
 
   return (

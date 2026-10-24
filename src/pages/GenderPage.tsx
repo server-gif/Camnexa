@@ -1,17 +1,17 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
+import { useNavigate } from 'react-router';
 import { GenderSelector } from '@/components/onboarding/GenderSelector';
 import { CrmNote } from '@/components/onboarding/CrmNote';
 import { OnboardingLayout } from '@/components/onboarding/OnboardingLayout';
 import { Button } from '@/components/ui/button';
 import { useOnboarding } from '@/features/onboarding/OnboardingContext';
 import { genderFormSchema, type GenderFormInput, type GenderFormValues } from '@/features/onboarding/onboarding.schema';
-import { useAdNavigation } from '@/hooks/useAdNavigation';
 import { usePageTitle } from '@/hooks/usePageTitle';
 
 export default function GenderPage() {
   usePageTitle('Gender');
-  const { navigateWithAd } = useAdNavigation();
+  const navigate = useNavigate();
   const { state, selectGender } = useOnboarding();
 
   const {
@@ -26,8 +26,8 @@ export default function GenderPage() {
 
   const onValid = (values: GenderFormValues) => {
     selectGender(values.gender);
-    // The interstitial plays once the gender is stored, then we reach the search screen.
-    void navigateWithAd('interstitial', '/girl-find');
+    // Straight on to the search screen (no interstitial between funnel steps).
+    navigate('/girl-find');
   };
 
   return (

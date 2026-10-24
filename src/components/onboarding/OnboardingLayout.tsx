@@ -43,8 +43,6 @@ export function OnboardingLayout({ step, title, titleTyping, description, childr
         ) : null}
 
         <div className="flex flex-1 flex-col">
-          {/* Boxed Google ad sits directly above the screen title. */}
-          <AdBanner />
           <div className="pt-[38px] text-center">
             <h1 className={`font-bold ${titleTyping ? 'text-[28px]' : 'text-[20px]'}`}>
               {titleTyping ? (
@@ -58,6 +56,9 @@ export function OnboardingLayout({ step, title, titleTyping, description, childr
             {description ? <div className="mx-auto mt-2.5 max-w-sm text-[14px]  leading-relaxed text-fg-muted">{description}</div> : null}
           </div>
           {children ? <div className="mt-[52px] flex-1 mb-[52px]">{children}</div> : <div className="flex-1" />}
+          {/* Boxed Google ad sits BELOW the controls: above the title it pushed the
+              choices down the screen and shifted them when the ad loaded. */}
+          <AdBanner className="mb-6 mt-0" />
         </div>
 
         {footer ? (

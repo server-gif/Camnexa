@@ -33,6 +33,7 @@
  */
 
 import { adUnits, gamEnabled, nextAdUnit, type GamRotatingPlacement } from '@/config/ads';
+import { captureAttribution, type Attribution } from '@/lib/attribution';
 
 const GPT_SRC = 'https://securepubads.g.doubleclick.net/tag/js/gpt.js';
 const GPT_SCRIPT_ID = 'gam-gpt-loader';
@@ -72,6 +73,60 @@ const BANNER_ID_PREFIX = 'gam-banner-slot';
 const INTERSTITIAL_DIV_ID = 'gam-interstitial-slot';
 /** Creative sizes GPT can serve into the modal card for the interstitial unit. */
 const INTERSTITIAL_SIZES: unknown[] = [[300, 250], [300, 357], [320, 480]];
+/**
+ * Interstitial request timing.
+ *
+ * `false` (default): the ad is requested only when the user taps Start / a clip.
+ * The modal opens at once and shows a loader; if Google has no creative within
+ * INTERSTITIAL_WAIT_MS the modal closes and the user goes on, so a no-fill never
+ * costs more than that wait. The creative only ever renders inside the VISIBLE
+ * modal, so every counted impression was actually on screen.
+ *
+ * `true`: the old behaviour — the creative is pre-rendered into the hidden modal
+ * on every page load. It counted ~2,800 impressions a day for ~100 real modal
+ * opens (ads rendered where nobody could see them), which Google can treat as
+ * invalid impressions, so it is off. Flip it only knowingly.
+ */
+const INTERSTITIAL_PREFETCH = false;
+const INTERSTITIAL_WAIT_MS = 1500;
+/** At most this many interstitials per browser session (sessionStorage). */
+const INTERSTITIAL_MAX_PER_SESSION = 2;
+const INTERSTITIAL_COUNT_KEY = 'cn:inter-count';
+
+/** Attribution key-values, set once at boot (page-level) — see attribution.ts. */
+let attribution: Attribution = {};
+/** Current route name; tagged on every slot as the `page` key-value. */
+let currentPage = 'landing';
+
+/** Record which route is on screen so slots requested from now on carry it. */
+export function setAdPage(page: string): void {
+  currentPage = page;
+}
+
+function interstitialCount(): number {
+  try {
+    return Number(window.sessionStorage.getItem(INTERSTITIAL_COUNT_KEY) ?? '0') || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function bumpInterstitialCount(): void {
+  try {
+    window.sessionStorage.setItem(INTERSTITIAL_COUNT_KEY, String(interstitialCount() + 1));
+  } catch {
+    /* without storage the cap simply does not apply */
+  }
+}
+
+/** Tag a slot with the current page name (best-effort; reporting only). */
+function tagSlot(slot: GptSlot): void {
+  try {
+    slot.setTargeting?.('page', currentPage);
+  } catch {
+    /* targeting is reporting-only; never block an ad on it */
+  }
+}
 
 // A minimal surface of the GPT API — only the pieces this app actually calls.
 type GptSlot = {
@@ -94,6 +149,7 @@ type GptPubAds = {
   addEventListener: (event: string, listener: GptListener) => void;
   removeEventListener: (event: string, listener: GptListener) => void;
   getSlots: () => GptSlot[];
+  setTargeting?: (key: string, value: string | string[]) => void;
   // GPT's refresh is overloaded: refresh(options) for a full refresh, or
   // refresh(slots, options) for a targeted one. Accept both shapes.
   refresh: (slotsOrOptions?: unknown, options?: Record<string, unknown>) => void;
@@ -225,21 +281,28 @@ export function getGpt(): Promise<Googletag | null> {
     // any later push runs synchronously, so services are enabled exactly once.
     gpt.cmd.push(() => {
       const pubads = gpt.pubads();
-      const oop = gpt.enums?.OutOfPageFormat;
 
-      // Define the native out-of-page rewarded slot now (fallback only), before
-      // enableServices(), so its first request is fetched and ready on demand.
+      // Campaign / ad set / ad / source key-values, so Ad Manager revenue can be
+      // reported per Meta campaign and joined with the spend report.
+      attribution = captureAttribution();
       try {
-        rewardedSlot = gpt.defineOutOfPageSlot(adUnits.rewarded, oop?.REWARDED) ?? null;
-        if (rewardedSlot) rewardedSlot.addService(pubads);
+        const keyValues: [string, string | undefined][] = [
+          ['campaign', attribution.campaign],
+          ['adset', attribution.adset],
+          ['ad', attribution.ad],
+          ['src', attribution.source],
+        ];
+        for (const [key, value] of keyValues) {
+          if (value) pubads.setTargeting?.(key, value);
+        }
       } catch {
-        rewardedSlot = null;
+        /* reporting-only */
       }
 
-      // The Google-managed anchor is deliberately NOT defined here. It must stay
-      // off the home screen, so `AdAnchor` mounts it through `rotateAnchor` only
-      // once the user reaches a non-home route; booting therefore stays anchor-
-      // free (the slot is created after enableServices and refreshed on demand).
+      // The rewarded slot is NOT defined here any more: it only fills on the
+      // girl-find screen, so `ensureRewardedSlot` creates it when that screen asks.
+      // (Defining it at boot made 3,500+ requests a day for 27 impressions.)
+      // The Google-managed anchor is mounted per route by `AdAnchor`/`rotateAnchor`.
 
       // Rewarded fires this when the fetched ad is ready. Only reveal it once the
       // app has asked (girl-find calls showRewarded); never pop it unprompted.
@@ -269,13 +332,8 @@ export function getGpt(): Promise<Googletag | null> {
 
       gpt.enableServices();
 
-      // Render the rewarded slot now rather than at ask time: the overlay can
-      // only be shown once GPT has built it, so warming it here is what lets a
-      // page deeper in the flow (the girl-find screen) show it immediately.
-      if (rewardedSlot) reveal(gpt, rewardedSlot);
-
-      // Build the custom interstitial modal and fire its first request now, so
-      // the creative is loaded before the user acts.
+      // Build the custom interstitial modal. It only requests its creative at
+      // boot when INTERSTITIAL_PREFETCH is on; by default it waits for a tap.
       interstitialModal = createAdModal(gpt, {
         divId: INTERSTITIAL_DIV_ID,
         sizes: INTERSTITIAL_SIZES,
@@ -354,6 +412,7 @@ export function mountInPageSlot(
     if (!slot) return null;
     filledSlot = slot;
     refreshCounts.delete(divId);
+    tagSlot(slot);
     slot.addService(pubads);
     // Services are already enabled (React mounts later), so display() alone
     // fetches this slot. A follow-up refresh() here used to fire a SECOND
@@ -412,7 +471,95 @@ export function showInterstitial(): Promise<void> {
 
   return getGpt().then((gpt) => {
     if (!gpt || !interstitialModal) return;
-    return openAdModal(interstitialModal, gpt);
+    if (INTERSTITIAL_PREFETCH) return openAdModal(interstitialModal, gpt);
+    // On-demand: a visitor who already saw the per-session maximum just goes on.
+    if (interstitialCount() >= INTERSTITIAL_MAX_PER_SESSION) return;
+    return openAdModalOnDemand(interstitialModal, gpt);
+  });
+}
+
+/**
+ * Request the interstitial only now, inside the visible modal. The modal opens at
+ * once with a loader; the creative is rendered into it (so every impression is on
+ * screen). If Google answers "no ad" or says nothing within INTERSTITIAL_WAIT_MS
+ * the modal closes and the promise resolves, so the caller navigates on. When an
+ * ad is shown it resolves when the user taps Close / presses Escape.
+ */
+function openAdModalOnDemand(modal: AdModal, gpt: Googletag): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const pubads = gpt.pubads();
+    let settled = false;
+    let waitTimer = 0;
+
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') finish();
+    };
+
+    function closeModal(): void {
+      const focused = document.activeElement;
+      if (focused instanceof HTMLElement && modal.root.contains(focused)) focused.blur();
+      modal.root.classList.remove('inter--open');
+      modal.root.setAttribute('aria-hidden', 'true');
+      document.body.style.overflow = '';
+      modal.closeBtn.removeEventListener('click', finish);
+      document.removeEventListener('keydown', onKey);
+    }
+
+    /** Tear the modal and its slot down, then let the caller continue. */
+    function finish(): void {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(waitTimer);
+      try {
+        pubads.removeEventListener('slotRenderEnded', onRender);
+      } catch {
+        /* removal is best-effort */
+      }
+      closeModal();
+      try {
+        if (modal.slot) gpt.destroySlots([modal.slot]);
+      } catch {
+        /* a slot that refuses to die is dropped from our reference anyway */
+      }
+      const card = document.getElementById(modal.divId);
+      if (card) card.innerHTML = '';
+      modal.slot = null;
+      modal.hasAd = false;
+      resolve();
+    }
+
+    function onRender(event: GptEvent): void {
+      if (settled || !event.slot || event.slot !== modal.slot) return;
+      window.clearTimeout(waitTimer);
+      if (event.isEmpty === true) {
+        finish();
+        return;
+      }
+      // Filled: leave the ad up until the user closes it.
+      modal.hasAd = true;
+      bumpInterstitialCount();
+    }
+
+    try {
+      pubads.addEventListener('slotRenderEnded', onRender);
+    } catch {
+      /* without the event the wait timer below still ends the attempt */
+    }
+
+    modal.root.classList.add('inter--open');
+    modal.root.setAttribute('aria-hidden', 'false');
+    document.body.style.overflow = 'hidden';
+    modal.closeBtn.addEventListener('click', finish);
+    document.addEventListener('keydown', onKey);
+
+    rotateAdModalSlot(modal, gpt);
+    if (!modal.slot) {
+      finish();
+      return;
+    }
+    waitTimer = window.setTimeout(() => {
+      if (!modal.hasAd) finish();
+    }, INTERSTITIAL_WAIT_MS);
   });
 }
 
@@ -466,8 +613,34 @@ export function showRewarded(): Promise<void> {
 export function warmRewarded(): void {
   if (!gamEnabled || typeof document === 'undefined') return;
   void getGpt().then((gpt) => {
-    if (gpt && !rewardedReadyEvent) requestRewarded(gpt);
+    if (!gpt) return;
+    // First call creates the slot, and display() inside already fetches it; only
+    // a later call (slot exists, nothing on hand) needs an explicit refresh.
+    if (ensureRewardedSlot(gpt)) return;
+    if (!rewardedReadyEvent) requestRewarded(gpt);
   });
+}
+
+/**
+ * Create the out-of-page rewarded slot the first time something asks for it (the
+ * girl-find screen). Returns true when it was created just now (and is already
+ * being fetched by display()). Rewarded is only worth requesting where it can
+ * show, so it is no longer requested on every page load.
+ */
+function ensureRewardedSlot(gpt: Googletag): boolean {
+  if (rewardedSlot) return false;
+  try {
+    const format = gpt.enums?.OutOfPageFormat?.REWARDED;
+    rewardedSlot = gpt.defineOutOfPageSlot(adUnits.rewarded, format) ?? null;
+    if (!rewardedSlot) return false;
+    tagSlot(rewardedSlot);
+    rewardedSlot.addService(gpt.pubads());
+    reveal(gpt, rewardedSlot);
+    return true;
+  } catch {
+    rewardedSlot = null;
+    return false;
+  }
 }
 
 /**
@@ -496,6 +669,7 @@ export function rotateAnchor(): void {
     try {
       anchorSlot = gpt.defineOutOfPageSlot(nextAdUnit('anchor'), anchorFmt) ?? null;
       if (anchorSlot) {
+        tagSlot(anchorSlot);
         anchorSlot.addService(pubads);
         // display() already fetches a slot defined after enableServices(); an
         // extra refresh() here only duplicated the request.
@@ -611,7 +785,7 @@ function createAdModal(gpt: Googletag, spec: AdModalSpec): AdModal | null {
         modal.hasAd = event.isEmpty !== true;
       }
     });
-    rotateAdModalSlot(modal, gpt);
+    if (INTERSTITIAL_PREFETCH) rotateAdModalSlot(modal, gpt);
   } catch {
     /* modal stays but never opens; callers fall back / proceed without an ad */
   }
@@ -652,6 +826,7 @@ function rotateAdModalSlot(modal: AdModal, gpt: Googletag): void {
     } catch {
       /* targeting is a nicety; the unit path already describes the format */
     }
+    tagSlot(slot);
     slot.addService(pubads);
     modal.slot = slot;
     // Services were already enabled, so display() fetches the new slot; a
@@ -699,6 +874,7 @@ function refillAdModal(modal: AdModal, gpt: Googletag): void {
  * can fall back to another placement.
  */
 function showRewardedNative(gpt: Googletag): Promise<boolean> {
+  ensureRewardedSlot(gpt);
   if (!rewardedSlot) return Promise.resolve(false);
   const pubads = gpt.pubads();
 

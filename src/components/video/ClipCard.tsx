@@ -6,6 +6,8 @@ import type { GirlImage } from '@/data/girlImages';
 type ClipCardProps = {
   image: GirlImage;
   className?: string;
+  /** Cards in the first screen load eagerly and first; the rest stay lazy. */
+  priority?: boolean;
 };
 
 /**
@@ -37,7 +39,7 @@ type ClipCardProps = {
  * the placeholder sits under the photo and both cross-fade once the bytes are
  * in, instead of the card flashing from dark box to face.
  */
-export function ClipCard({ image, className }: ClipCardProps) {
+export function ClipCard({ image, className, priority = false }: ClipCardProps) {
   const pictureRef = useRef<HTMLImageElement>(null);
   const [loaded, setLoaded] = useState(false);
 
@@ -75,7 +77,9 @@ export function ClipCard({ image, className }: ClipCardProps) {
         src={image.src}
         alt=""
         aria-hidden="true"
-        loading="lazy"
+        loading={priority ? 'eager' : 'lazy'}
+        fetchPriority={priority ? 'high' : undefined}
+        decoding="async"
         onLoad={() => setLoaded(true)}
         onError={() => setLoaded(true)}
         className={cn(
@@ -98,7 +102,7 @@ export function ClipCard({ image, className }: ClipCardProps) {
           <img
             src={image.src}
             alt=""
-            loading="lazy"
+            loading={priority ? 'eager' : 'lazy'}
             className="size-full scale-[1.6] object-cover object-top"
           />
         </span>
